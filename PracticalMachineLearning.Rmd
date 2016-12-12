@@ -1,0 +1,158 @@
+---
+title: "Practical Machine Learning Project"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+geometry: margin=0.3in
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set( eval= TRUE, echo = TRUE)
+```
+
+# Executive Summary
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+
+#Data
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.The information has been generously provided for  this cousera course by the authors:  
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. The related paper is: "Qualitative Activity Recognition of Weight Lifting Exercises", presented at "Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13)" in Stuttgart, Germany: ACM SIGCHI, 2013.
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+# Problem assesment
+
+This is a classification problem.Unfortunatelly we do not have a code book, describing in detail the variables available. From the data pattern we can see that we have full set of values only when the new_window variable is TRUE. This is a hint that probably we should process the data into chunks, but without knowing the meaning of the variables this is not possible. That is not a big problem, since we only need to classify 20 values from the same group of data. However, under real conditions, when we would need to assess new users and minimize our real out-of-sample error, the detailed knowledge of these variables would be very important. It would also allow us to better filter outliers.
+
+Also, we are not given any limitation:  
+
+* No resource limitation
+* No complexity limitation
+* No explainability limitations
+* No scalability limitations
+
+This makes our problem easier.
+
+We load the appropriate libraries: 
+```{r, message=FALSE}
+library(dplyr)
+library(randomForest)
+library(caret)
+library(ggplot2)
+# Parallel Processing libraries and setup
+library(parallel)
+library(doParallel)
+
+
+```
+
+# Load & Clean Data
+
+The data contain some values that are "divided by zero" (#DIV/0!). Therefore when we read the files, we transform these values in NA.
+
+We read the data, transforming #DIV/0! into NA values:
+```{r}
+#The following commented out lines load the data directly from the web.
+#
+#training <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", na.strings=c("#DIV/0!"), row.names = 1)
+#testing <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", na.strings=c("#DIV/0!"), row.names = 1)
+pml_training <- read.csv("pml-training.csv", na.strings=c("#DIV/0!"), row.names = 1)
+pml_test <- read.csv("pml-testing.csv", na.strings=c("#DIV/0!"), row.names = 1)
+```
+
+
+# Covariate Processing
+
+We look at our variables and their values:
+```{r, eval=FALSE, echo=TRUE}
+str(pml_training)
+```
+
+We will remove the columns: user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp,new_window, num_window) since they are user-dependent and time-dependent.
+
+```{r}
+remove_col <- c("user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp","new_window", "num_window")
+pml_data <- select(pml_training, -one_of(remove_col))
+```
+
+Also, many columns have great percentage of NA. To get a list of these columns, along with their percentage of NA we run the following code:
+```{r}
+percentageNA <- colMeans(is.na(pml_data))
+percentageNA[which (percentageNA != FALSE)]
+```
+
+We observe that all the columns that have NA, are mostly filled with NA (all columns have more than 97.9% NA). 
+Therefore **it is better not to impute, but rather completely remove.**  
+We remove all columns with more than 90% NA:
+```{r}
+remove_col <- which(colMeans(is.na(pml_data)) > 0.9)
+pml_data <- pml_data [, - remove_col]
+```
+
+Next step is to remove nearZero Variance columns, so we can reduce the number of predictors into a more acceptable number.
+```{r}
+PredictorVariance <-  nearZeroVar(pml_data, saveMetrics = TRUE)
+pml_data <- pml_data[, PredictorVariance$nzv==FALSE]
+```
+
+The final number of predictors is 53.
+
+# Model creation
+
+Since the sensor data have characteristic noise, the algorithm used to create a model in the paper was the Random Forest. We do not have any expert knowledge of the data, nor we have a detailed description of the predictors so that we will be able to creater better covariates. Also, as mentioned above, we do not have any limitations, therefore we will also try the Random Forest approach. One more advantage is that there is no need for further pre-processing or normalization.
+If the out-of-sample error estimation is not acceptable, then we will try a different approach.
+
+* Set Seed 
+```{r}
+set.seed(12357911)
+```
+
+* Although for Random Forest approach does not require a spliting of data between training and testing to assess the accuracy of the model, we have enough data. Therefore we split with 80% of the data reserved for training. In other approaches we would split into 60% data for training and 40% data for testing.
+
+```{r}
+inTraining <- createDataPartition(pml_data$classe, p = 0.8,list=FALSE)
+training <- pml_data[inTraining,]
+testing <- pml_data[-inTraining,]
+```
+
+* we are setting the parameters for parallel processing and set training control parameters:
+```{r}
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+fitControl <- trainControl(method = "cv", number = 10, allowParallel = TRUE)
+```
+
+* we are using the random forest method to train the model, with the above training control parameters:
+```{r}
+system.time(fit_rf <-  train(classe~., method="rf",data=training,trControl = fitControl))
+# Stop parallel processing
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+* Let's calculate the predictions and estimate the out-of-sample accurancy for the testing data:
+```{r}
+pred_rf <- predict(fit_rf,testing)
+confusionMatrix(pred_rf, testing$classe)$overall[1]
+```
+
+The accuracy of the model is magnificent, therefore we do not neet to research for different models.
+Below we can see the top 25  most important Im used in our model:
+```{r}
+fit_rf_variables <- varImp(fit_rf)
+ggplot(fit_rf_variables,top=25)+ labs(title = "Importance of Top 25 Variables", y = "Importance (0-100)", x="Variable" )
+```
+
+# Quiz results
+Last, we must calculate the predicted values for the pml_test, the 20 requested values
+```{r}
+predict(fit_rf, pml_test)
+```
+And of course we predict correctly 20/20
