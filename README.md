@@ -1,4 +1,5 @@
-# Practical Machine Learning Project
+# Course: Data Ploting
+Part of John Hopkins' University Data Science specialisation (https://www.coursera.org/specializations/jhu-data-science)
 
-Here you will find the .Rmd and .html files. To visit the website that hosts the compiled .html file, please goto:
-https://lcfgr.github.io/pml/
+This repository contains the .Rmd and .html files of the project. To visit the website that hosts the compiled .html file, please goto:
+https://lcfgr.github.io/DS.PML
